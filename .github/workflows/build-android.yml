@@ -17,6 +17,19 @@ jobs:
         run: |
           unzip -q kasmini_pos_android_internal_storage.zip -d source
           cp -a source/kasmini_android/. .
+      - name: Use JSON Capacitor configuration
+        run: |
+          cat > capacitor.config.json <<'EOF'
+          {
+            "appId": "id.kasmini.pos",
+            "appName": "Kasmini POS",
+            "webDir": "dist",
+            "android": {
+              "allowMixedContent": false
+            }
+          }
+          EOF
+          rm -f capacitor.config.ts
       - uses: actions/setup-node@v5
         with:
           node-version: 20
@@ -30,8 +43,6 @@ jobs:
           packages: platform-tools platforms;android-35 build-tools;35.0.0
       - name: Install dependencies
         run: npm install --no-audit --no-fund
-      - name: Install TypeScript for Capacitor config
-        run: npm install --no-save typescript
       - name: Build web assets
         run: npm run build
       - name: Generate Android project
