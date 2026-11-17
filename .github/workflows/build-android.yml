@@ -71,6 +71,24 @@ jobs:
           grep -R -q "PIN 6 digit" dist
           grep -R -q "Bagikan" dist
 
+      - name: Remove TypeScript Capacitor config and use JSON config
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f capacitor.config.ts capacitor.config.js capacitor.config.mjs
+          cat > capacitor.config.json <<'EOF'
+          {
+            "appId": "id.kasmini.pos",
+            "appName": "Kasir DBL",
+            "webDir": "dist",
+            "android": {
+              "allowMixedContent": false
+            }
+          }
+          EOF
+          test ! -e capacitor.config.ts
+          cat capacitor.config.json
+
       - name: Generate Android project
         run: npx cap add android
 
