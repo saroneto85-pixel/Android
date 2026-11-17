@@ -1,4 +1,4 @@
-name: Build Kasmini POS Android APK
+name: Build Kasir DBL Android APK
 
 on:
   workflow_dispatch:
@@ -10,193 +10,89 @@ permissions:
 
 jobs:
   build:
+    name: Build Kasir DBL from latest source
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - name: Extract prepared Android project
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Extract Kasir DBL source (latest feature ZIP)
         run: |
-          unzip -q kasmini_pos_android_internal_storage.zip -d source
+          test -f kasir_dbl_source_fitur_lengkap.zip
+          unzip -q kasir_dbl_source_fitur_lengkap.zip -d source
+          test -f source/kasmini_android/package.json
           cp -a source/kasmini_android/. .
-      - name: Patch SQLite adapter to use Capacitor SQLite v7 API
-        run: |
-          cat > db.js <<'EOF'
-          import { Capacitor } from '@capacitor/core';
-          import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
+          echo "=== BUILD SOURCE ==="
+          cat package.json
+          echo "=== SOURCE MARKERS ==="
+          grep -q "PIN admin 6 digit" FEATURES-IMPLEMENTED.md
+          grep -q "Bluetooth Classic SPP" FEATURES-IMPLEMENTED.md
+          grep -q "Kasir DBL" index.html
 
-          const STORES = ['products', 'transactions', 'expenses', 'settings'];
-          const DB_NAME = 'kasmini_pos';
-          const DB_VERSION = 1;
-          let sqlite = null;
-          let sqliteConnection = null;
-          let idb = null;
-          let initPromise = null;
-          export const isNative = Capacitor.isNativePlatform();
-
-          function assertStore(name) {
-            if (!STORES.includes(name)) throw new Error(`Store tidak dikenal: ${name}`);
-          }
-          function assertReady() {
-            if (isNative && !sqlite) throw new Error('SQLite belum siap. Muat ulang aplikasi.');
-            if (!isNative && !idb) throw new Error('IndexedDB belum siap. Muat ulang aplikasi.');
-          }
-          function idbStore(name, mode = 'readonly') {
-            return idb.transaction(name, mode).objectStore(name);
-          }
-          function idbAll(name) {
-            return new Promise((resolve, reject) => {
-              const request = idbStore(name).getAll();
-              request.onsuccess = () => resolve(request.result || []);
-              request.onerror = () => reject(request.error || new Error('Gagal membaca data'));
-            });
-          }
-          function idbPut(name, obj) {
-            return new Promise((resolve, reject) => {
-              const request = idbStore(name, 'readwrite').put(obj);
-              request.onsuccess = () => resolve(obj);
-              request.onerror = () => reject(request.error || new Error('Gagal menyimpan data'));
-            });
-          }
-          function idbDel(name, id) {
-            return new Promise((resolve, reject) => {
-              const request = idbStore(name, 'readwrite').delete(id);
-              request.onsuccess = () => resolve();
-              request.onerror = () => reject(request.error || new Error('Gagal menghapus data'));
-            });
-          }
-          async function initNativeDatabase() {
-            sqliteConnection = new SQLiteConnection(CapacitorSQLite);
-            await sqliteConnection.checkConnectionsConsistency();
-            const existing = await sqliteConnection.isConnection(DB_NAME, false);
-            sqlite = existing.result
-              ? await sqliteConnection.retrieveConnection(DB_NAME, false)
-              : await sqliteConnection.createConnection(DB_NAME, false, 'no-encryption', DB_VERSION, false);
-            const openState = await sqlite.isDBOpen();
-            if (!openState.result) await sqlite.open();
-            await sqlite.execute(
-              'CREATE TABLE IF NOT EXISTS pos_records (store_name TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (store_name, id));'
-            );
-            await sqlite.execute(
-              'CREATE INDEX IF NOT EXISTS idx_pos_records_store ON pos_records(store_name);'
-            );
-            return 'SQLite aktif — penyimpanan internal HP';
-          }
-          async function initBrowserDatabase() {
-            await new Promise((resolve, reject) => {
-              const request = indexedDB.open('kasmini-pos-plus', 1);
-              request.onupgradeneeded = event => {
-                const database = event.target.result;
-                STORES.forEach(name => {
-                  if (!database.objectStoreNames.contains(name)) {
-                    database.createObjectStore(name, { keyPath: 'id' });
-                  }
-                });
-              };
-              request.onsuccess = event => {
-                idb = event.target.result;
-                idb.onversionchange = () => idb.close();
-                resolve();
-              };
-              request.onerror = () => reject(request.error || new Error('Gagal membuka IndexedDB'));
-              request.onblocked = () => reject(new Error('Database browser sedang digunakan tab lain.'));
-            });
-            return 'IndexedDB aktif — penyimpanan browser';
-          }
-          export function initDatabase() {
-            if (!initPromise) {
-              initPromise = (isNative ? initNativeDatabase() : initBrowserDatabase()).catch(error => {
-                initPromise = null;
-                sqlite = null;
-                throw error;
-              });
-            }
-            return initPromise;
-          }
-          export async function all(name) {
-            assertStore(name);
-            assertReady();
-            if (!isNative) return idbAll(name);
-            // SQLiteDBConnection.query expects (statement, values), not an options object.
-            const result = await sqlite.query(
-              'SELECT payload FROM pos_records WHERE store_name = ? ORDER BY rowid',
-              [name]
-            );
-            return (result.values || []).map(row => {
-              try { return JSON.parse(row.payload); }
-              catch { throw new Error(`Ada data ${name} yang rusak dan tidak dapat dibaca`); }
-            });
-          }
-          export async function put(name, obj) {
-            assertStore(name);
-            assertReady();
-            if (!obj || obj.id === undefined || obj.id === null || String(obj.id) === '') {
-              throw new Error('Setiap data harus memiliki ID');
-            }
-            if (!isNative) return idbPut(name, obj);
-            // SQLiteDBConnection.run expects (statement, values), not an options object.
-            await sqlite.run(
-              'INSERT OR REPLACE INTO pos_records (store_name, id, payload) VALUES (?, ?, ?)',
-              [name, String(obj.id), JSON.stringify(obj)]
-            );
-            return obj;
-          }
-          export async function del(name, id) {
-            assertStore(name);
-            assertReady();
-            if (!isNative) return idbDel(name, id);
-            await sqlite.run(
-              'DELETE FROM pos_records WHERE store_name = ? AND id = ?',
-              [name, String(id)]
-            );
-          }
-          export async function databaseInfo() {
-            await initDatabase();
-            return {
-              engine: isNative ? 'SQLite' : 'IndexedDB',
-              location: isNative ? 'Penyimpanan internal privat aplikasi' : 'Penyimpanan browser',
-              stores: [...STORES]
-            };
-          }
-          EOF
-      - name: Use JSON Capacitor configuration
+      - name: Set app identity
         run: |
           cat > capacitor.config.json <<'EOF'
           {
             "appId": "id.kasmini.pos",
-            "appName": "Kasmini POS",
+            "appName": "Kasir DBL",
             "webDir": "dist",
             "android": { "allowMixedContent": false }
           }
           EOF
           rm -f capacitor.config.ts
-      - uses: actions/setup-node@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
         with:
           node-version: 20
-      - uses: actions/setup-java@v5
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
           packages: platform-tools platforms;android-35 build-tools;35.0.0
-      - name: Install dependencies
+
+      - name: Install npm dependencies
         run: npm install --no-audit --no-fund
+
       - name: Build web assets
         run: npm run build
-      - name: Check JavaScript syntax
-        run: node --check db.js
+
+      - name: Verify latest features are in built web bundle
+        run: |
+          grep -R -q "Kasir DBL" dist
+          grep -R -q "Pelanggan" dist
+          grep -R -q "Bluetooth" dist
+          node --check app.js
+          node --check db.js
+
       - name: Generate Android project
         run: npx cap add android
-      - name: Sync Capacitor
+
+      - name: Sync Capacitor plugins and assets
         run: npx cap sync android
-      - name: Build debug APK
+
+      - name: Install native Bluetooth Classic SPP bridge
+        run: |
+          mkdir -p android/app/src/main/java/id/kasmini/pos
+          cp android-native/src/main/java/id/kasmini/pos/*.java android/app/src/main/java/id/kasmini/pos/
+          python3 android-native/patch_manifest.py
+
+      - name: Build APK
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon assembleDebug
-      - uses: actions/upload-artifact@v6
+          ./gradlew --no-daemon clean assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v6
         with:
-          name: kasmini-pos-debug-apk
+          name: kasir-dbl-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
