@@ -17,6 +17,146 @@ jobs:
         run: |
           unzip -q kasmini_pos_android_internal_storage.zip -d source
           cp -a source/kasmini_android/. .
+      - name: Patch SQLite adapter to use Capacitor SQLite v7 API
+        run: |
+          cat > db.js <<'EOF'
+          import { Capacitor } from '@capacitor/core';
+          import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
+
+          const STORES = ['products', 'transactions', 'expenses', 'settings'];
+          const DB_NAME = 'kasmini_pos';
+          const DB_VERSION = 1;
+          let sqlite = null;
+          let sqliteConnection = null;
+          let idb = null;
+          let initPromise = null;
+          export const isNative = Capacitor.isNativePlatform();
+
+          function assertStore(name) {
+            if (!STORES.includes(name)) throw new Error(`Store tidak dikenal: ${name}`);
+          }
+          function assertReady() {
+            if (isNative && !sqlite) throw new Error('SQLite belum siap. Muat ulang aplikasi.');
+            if (!isNative && !idb) throw new Error('IndexedDB belum siap. Muat ulang aplikasi.');
+          }
+          function idbStore(name, mode = 'readonly') {
+            return idb.transaction(name, mode).objectStore(name);
+          }
+          function idbAll(name) {
+            return new Promise((resolve, reject) => {
+              const request = idbStore(name).getAll();
+              request.onsuccess = () => resolve(request.result || []);
+              request.onerror = () => reject(request.error || new Error('Gagal membaca data'));
+            });
+          }
+          function idbPut(name, obj) {
+            return new Promise((resolve, reject) => {
+              const request = idbStore(name, 'readwrite').put(obj);
+              request.onsuccess = () => resolve(obj);
+              request.onerror = () => reject(request.error || new Error('Gagal menyimpan data'));
+            });
+          }
+          function idbDel(name, id) {
+            return new Promise((resolve, reject) => {
+              const request = idbStore(name, 'readwrite').delete(id);
+              request.onsuccess = () => resolve();
+              request.onerror = () => reject(request.error || new Error('Gagal menghapus data'));
+            });
+          }
+          async function initNativeDatabase() {
+            sqliteConnection = new SQLiteConnection(CapacitorSQLite);
+            await sqliteConnection.checkConnectionsConsistency();
+            const existing = await sqliteConnection.isConnection(DB_NAME, false);
+            sqlite = existing.result
+              ? await sqliteConnection.retrieveConnection(DB_NAME, false)
+              : await sqliteConnection.createConnection(DB_NAME, false, 'no-encryption', DB_VERSION, false);
+            const openState = await sqlite.isDBOpen();
+            if (!openState.result) await sqlite.open();
+            await sqlite.execute(
+              'CREATE TABLE IF NOT EXISTS pos_records (store_name TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (store_name, id));'
+            );
+            await sqlite.execute(
+              'CREATE INDEX IF NOT EXISTS idx_pos_records_store ON pos_records(store_name);'
+            );
+            return 'SQLite aktif — penyimpanan internal HP';
+          }
+          async function initBrowserDatabase() {
+            await new Promise((resolve, reject) => {
+              const request = indexedDB.open('kasmini-pos-plus', 1);
+              request.onupgradeneeded = event => {
+                const database = event.target.result;
+                STORES.forEach(name => {
+                  if (!database.objectStoreNames.contains(name)) {
+                    database.createObjectStore(name, { keyPath: 'id' });
+                  }
+                });
+              };
+              request.onsuccess = event => {
+                idb = event.target.result;
+                idb.onversionchange = () => idb.close();
+                resolve();
+              };
+              request.onerror = () => reject(request.error || new Error('Gagal membuka IndexedDB'));
+              request.onblocked = () => reject(new Error('Database browser sedang digunakan tab lain.'));
+            });
+            return 'IndexedDB aktif — penyimpanan browser';
+          }
+          export function initDatabase() {
+            if (!initPromise) {
+              initPromise = (isNative ? initNativeDatabase() : initBrowserDatabase()).catch(error => {
+                initPromise = null;
+                sqlite = null;
+                throw error;
+              });
+            }
+            return initPromise;
+          }
+          export async function all(name) {
+            assertStore(name);
+            assertReady();
+            if (!isNative) return idbAll(name);
+            // SQLiteDBConnection.query expects (statement, values), not an options object.
+            const result = await sqlite.query(
+              'SELECT payload FROM pos_records WHERE store_name = ? ORDER BY rowid',
+              [name]
+            );
+            return (result.values || []).map(row => {
+              try { return JSON.parse(row.payload); }
+              catch { throw new Error(`Ada data ${name} yang rusak dan tidak dapat dibaca`); }
+            });
+          }
+          export async function put(name, obj) {
+            assertStore(name);
+            assertReady();
+            if (!obj || obj.id === undefined || obj.id === null || String(obj.id) === '') {
+              throw new Error('Setiap data harus memiliki ID');
+            }
+            if (!isNative) return idbPut(name, obj);
+            // SQLiteDBConnection.run expects (statement, values), not an options object.
+            await sqlite.run(
+              'INSERT OR REPLACE INTO pos_records (store_name, id, payload) VALUES (?, ?, ?)',
+              [name, String(obj.id), JSON.stringify(obj)]
+            );
+            return obj;
+          }
+          export async function del(name, id) {
+            assertStore(name);
+            assertReady();
+            if (!isNative) return idbDel(name, id);
+            await sqlite.run(
+              'DELETE FROM pos_records WHERE store_name = ? AND id = ?',
+              [name, String(id)]
+            );
+          }
+          export async function databaseInfo() {
+            await initDatabase();
+            return {
+              engine: isNative ? 'SQLite' : 'IndexedDB',
+              location: isNative ? 'Penyimpanan internal privat aplikasi' : 'Penyimpanan browser',
+              stores: [...STORES]
+            };
+          }
+          EOF
       - name: Use JSON Capacitor configuration
         run: |
           cat > capacitor.config.json <<'EOF'
@@ -24,9 +164,7 @@ jobs:
             "appId": "id.kasmini.pos",
             "appName": "Kasmini POS",
             "webDir": "dist",
-            "android": {
-              "allowMixedContent": false
-            }
+            "android": { "allowMixedContent": false }
           }
           EOF
           rm -f capacitor.config.ts
@@ -45,6 +183,8 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Build web assets
         run: npm run build
+      - name: Check JavaScript syntax
+        run: node --check db.js
       - name: Generate Android project
         run: npx cap add android
       - name: Sync Capacitor
