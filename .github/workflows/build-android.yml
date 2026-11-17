@@ -10,36 +10,33 @@ permissions:
 
 jobs:
   build:
-    name: Build Kasir DBL from latest source
+    name: Build APK from latest uploaded source
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Extract Kasir DBL source (latest feature ZIP)
+      - name: Extract latest Kasir DBL source
+        shell: bash
         run: |
-          test -f kasir_dbl_source_fitur_lengkap.zip
-          unzip -q kasir_dbl_source_fitur_lengkap.zip -d source
-          test -f source/kasmini_android/package.json
-          cp -a source/kasmini_android/. .
-          echo "=== BUILD SOURCE ==="
-          cat package.json
-          echo "=== SOURCE MARKERS ==="
-          grep -q "PIN admin 6 digit" FEATURES-IMPLEMENTED.md
+          set -euo pipefail
+          SOURCE_ZIP="kasir_dbl_source_sinkronisasi_kontak.zip"
+          test -s "$SOURCE_ZIP" || { echo "::error::Latest source ZIP not found: $SOURCE_ZIP"; exit 1; }
+          mkdir source
+          unzip -q "$SOURCE_ZIP" -d source
+          test -s source/package.json
+          test -s source/app.js
+          test -s source/index.html
+          test -s source/android-native/src/main/java/id/kasmini/pos/PhoneContactsPlugin.java
+          test -s source/android-native/src/main/java/id/kasmini/pos/BluetoothSerialPlugin.java
+          test -s source/android-branding/mipmap-xxxhdpi/ic_launcher.png
+          cp -a source/. .
+          echo "Building latest source archive: $SOURCE_ZIP"
+          sha256sum "$SOURCE_ZIP"
+          grep -q "Sinkronkan Kontak HP" index.html
+          grep -q "PhoneContacts" app.js
           grep -q "Bluetooth Classic SPP" FEATURES-IMPLEMENTED.md
           grep -q "Kasir DBL" index.html
-
-      - name: Set app identity
-        run: |
-          cat > capacitor.config.json <<'EOF'
-          {
-            "appId": "id.kasmini.pos",
-            "appName": "Kasir DBL",
-            "webDir": "dist",
-            "android": { "allowMixedContent": false }
-          }
-          EOF
-          rm -f capacitor.config.ts
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
@@ -63,13 +60,16 @@ jobs:
       - name: Build web assets
         run: npm run build
 
-      - name: Verify latest features are in built web bundle
+      - name: Verify latest web features are included
+        shell: bash
         run: |
-          grep -R -q "Kasir DBL" dist
-          grep -R -q "Pelanggan" dist
-          grep -R -q "Bluetooth" dist
+          set -euo pipefail
           node --check app.js
           node --check db.js
+          grep -R -q "Kasir DBL" dist
+          grep -R -q "Sinkronkan Kontak HP" dist
+          grep -R -q "PIN 6 digit" dist
+          grep -R -q "Bagikan" dist
 
       - name: Generate Android project
         run: npx cap add android
@@ -77,22 +77,43 @@ jobs:
       - name: Sync Capacitor plugins and assets
         run: npx cap sync android
 
-      - name: Install native Bluetooth Classic SPP bridge
+      - name: Apply Kasir DBL launcher icons
+        shell: bash
         run: |
+          set -euo pipefail
+          for dir in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi mipmap-anydpi-v26 drawable-nodpi values; do
+            mkdir -p "android/app/src/main/res/$dir"
+            cp -a "android-branding/$dir/." "android/app/src/main/res/$dir/"
+          done
+          test -s android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          test -s android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+
+      - name: Install native Bluetooth and phone contacts plugins
+        shell: bash
+        run: |
+          set -euo pipefail
           mkdir -p android/app/src/main/java/id/kasmini/pos
           cp android-native/src/main/java/id/kasmini/pos/*.java android/app/src/main/java/id/kasmini/pos/
           python3 android-native/patch_manifest.py
+          grep -q 'READ_CONTACTS' android/app/src/main/AndroidManifest.xml
+          grep -q 'PhoneContactsPlugin.class' android/app/src/main/java/id/kasmini/pos/MainActivity.java
+          grep -q 'BluetoothSerialPlugin.class' android/app/src/main/java/id/kasmini/pos/MainActivity.java
 
-      - name: Build APK
+      - name: Build clean debug APK
         working-directory: android
         run: |
           chmod +x gradlew
           ./gradlew --no-daemon clean assembleDebug
 
+      - name: Verify APK package
+        run: |
+          test -s android/app/build/outputs/apk/debug/app-debug.apk
+          ls -lh android/app/build/outputs/apk/debug/app-debug.apk
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v6
         with:
-          name: kasir-dbl-debug-apk
+          name: kasir-dbl-latest-source-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
