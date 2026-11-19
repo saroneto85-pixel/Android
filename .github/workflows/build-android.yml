@@ -12,6 +12,8 @@ jobs:
   build:
     name: Build APK from latest uploaded source
     runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -20,7 +22,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SOURCE_ZIP="kasir_dbl_source_sinkronisasi_kontak.zip"
+          SOURCE_ZIP="KASIR_DBL_source_final_1.2.0.zip"
           test -s "$SOURCE_ZIP" || { echo "::error::Latest source ZIP not found: $SOURCE_ZIP"; exit 1; }
           mkdir source
           unzip -q "$SOURCE_ZIP" -d source
@@ -41,7 +43,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 24
           cache: ''
 
       - name: Set up JDK
@@ -112,6 +114,9 @@ jobs:
           test -s android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
           test -s android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
 
+      - name: Configure Maven repositories and mirrors
+        run: python3 android-native/patch_gradle_repositories.py
+
       - name: Install native Bluetooth and phone contacts plugins
         shell: bash
         run: |
@@ -127,7 +132,8 @@ jobs:
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon clean assembleDebug
+          ./gradlew --stop
+          ./gradlew --no-daemon --refresh-dependencies clean assembleDebug --stacktrace
 
       - name: Verify APK package
         run: |
