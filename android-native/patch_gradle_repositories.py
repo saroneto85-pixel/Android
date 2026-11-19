@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Add reliable Maven mirrors to the generated Capacitor Android Gradle project."""
+"""Configure stable official Maven repositories plus a Maven Central fallback."""
 from pathlib import Path
 
 root = Path("android")
@@ -25,12 +25,23 @@ for path in targets:
         continue
     found = True
     text = path.read_text()
-    kotlin = path.suffix == ".kts"
-    text = add_repo(text, "mavenCentral()", "https://maven.aliyun.com/repository/central", kotlin)
-    text = add_repo(text, "mavenCentral()", "https://repo1.maven.org/maven2/", kotlin)
-    text = add_repo(text, "google()", "https://maven.aliyun.com/repository/google", kotlin)
+    # Remove Aliyun mirrors: the previous Actions run showed HTTP 502.
+    text = text.replace(
+        'maven { url "https://maven.aliyun.com/repository/central" }', ""
+    ).replace(
+        "maven { url 'https://maven.aliyun.com/repository/central' }", ""
+    ).replace(
+        'maven { url "https://maven.aliyun.com/repository/google" }', ""
+    ).replace(
+        "maven { url 'https://maven.aliyun.com/repository/google' }", ""
+    )
+    # Keep official Google Maven and Maven Central; repo1 is a Central fallback.
+    text = add_repo(
+        text, "mavenCentral()", "https://repo1.maven.org/maven2/",
+        path.suffix == ".kts"
+    )
     path.write_text(text)
 
 if not found:
     raise SystemExit("Tidak ditemukan file Gradle hasil generate Capacitor di folder android/")
-print("Maven Central dan Google mirror telah ditambahkan ke konfigurasi Gradle.")
+print("Google Maven dan Maven Central resmi aktif; repo1 disiapkan sebagai fallback.")
