@@ -14,9 +14,9 @@ def add_repo(text: str, token: str, repo: str, kotlin: bool) -> str:
     if repo in text:
         return text
     if kotlin:
-        addition = f'maven {{ url = uri("{repo}") }}\\n        {token}'
+        addition = f'maven {{ url = uri("{repo}") }}' + "\n        " + token
     else:
-        addition = f"maven {{ url '{repo}' }}\\n        {token}"
+        addition = f"maven {{ url '{repo}' }}" + "\n        " + token
     return text.replace(token, addition)
 
 found = False
