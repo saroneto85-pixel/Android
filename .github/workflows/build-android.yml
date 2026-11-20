@@ -114,8 +114,24 @@ jobs:
           test -s android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
           test -s android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
 
-      - name: Configure Maven repositories and mirrors
-        run: python3 android-native/patch_gradle_repositories.py
+      - name: Configure Maven repository fallback init script
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/maven-fallback.init.gradle <<'EOF'
+          def mirrorUrls = [
+              'https://maven-central.storage-download.googleapis.com/maven2/',
+              'https://repo.huaweicloud.com/repository/maven/'
+          ]
+          gradle.beforeProject { project ->
+              project.buildscript.repositories {
+                  mirrorUrls.each { url -> maven { setUrl(url) } }
+              }
+              project.repositories {
+                  mirrorUrls.each { url -> maven { setUrl(url) } }
+              }
+          }
+          EOF
 
       - name: Install native Bluetooth and phone contacts plugins
         shell: bash
@@ -133,7 +149,7 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew --stop
-          ./gradlew --no-daemon --refresh-dependencies clean assembleDebug --stacktrace
+          ./gradlew --no-daemon --refresh-dependencies -I /tmp/maven-fallback.init.gradle clean assembleDebug --stacktrace
 
       - name: Verify APK package
         run: |
